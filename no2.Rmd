@@ -1,0 +1,319 @@
+---
+title: "NO2 Dataset Analysis"
+date: "2024-03-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+## About NO2 Data Set
+
+The "no2" dataset likely contains data related to nitrogen dioxide (NO2) concentrations in Germany.
+
+### R Packages
+
+```{r, warning=FALSE,message=FALSE}
+library(gstat)
+library(tidyverse)
+library(sf)
+library(viridis)
+library(patchwork)
+library(stars)
+library(ggplot2)
+```
+
+### Read Data
+
+```{r}
+no2 <- read_csv(system.file("external/no2.csv", 
+                            package = "gstat"), show_col_types = FALSE)
+```
+
+```{r,message=FALSE}
+head(no2)
+```
+
+```{r}
+dim(no2)
+```
+
+```{r}
+colnames(no2)
+```
+
+```{r,message=FALSE}
+summary(no2)
+```
+
+```{r,message=FALSE}
+head(data.frame(no2), 3)
+
+```
+
+### Create a Coordinate Reference System (CRS) Object
+
+```{r}
+crs <- st_crs("EPSG:32632")
+```
+
+```{r,message=FALSE}
+no2.sf <- st_as_sf(no2, crs = "OGC:CRS84", coords = 
+                     c("station_longitude_deg", "station_latitude_deg")) |>
+st_transform(crs) 
+head(no2.sf)
+
+```
+
+### Spatial Visualization
+
+#### Load country bondries
+
+```{r,message=FALSE}
+map <- read_sf("de_nuts1.gpkg") |> st_transform(crs) 
+head(map)
+```
+
+```{r}
+plot1 <-ggplot() + geom_sf(data = map) +  labs(title = "Country Map")
+plot1
+```
+
+Figure 1 : Country map of Germany
+
+```{r}
+plot2<-ggplot() + geom_sf(data = map) + 
+       geom_sf(data = no2.sf, mapping = aes(col = NO2)) + 
+        scale_color_viridis() + labs(title = "NO2 concentration")
+plot2
+```
+
+Figure 2 : Concentration of NO2
+
+\- Figure 1 illustrates the spatial variability of NO2 concentrations, highlighting areas of concern and potential health risks associated with air quality.
+
+```{r}
+plot1 | plot2
+```
+
+Figure 3 : Combine map of country map and NO2 concentration
+
+#### The inverse distance weighted interpolation
+
+```{r,message=FALSE}
+grid <- st_bbox(map) |>
+  st_as_stars(dx = 10000) |> st_crop(map) 
+grid
+
+
+grid <- st_bbox(map) |>
+  st_as_stars(dx = 10000) |> st_crop(map) 
+grid
+```
+
+```{r}
+st_crs(grid) <- st_crs(no2.sf)
+```
+
+```{r,message=FALSE}
+interpolated.values <- idw(NO2~1, no2.sf, grid)
+```
+
+```{r,message=FALSE}
+interpolated.values
+```
+
+```{r}
+plot3<- ggplot() + geom_stars(data = interpolated.values, 
+                      aes(fill = var1.pred, x = x, y = y)) + 
+  geom_sf(data = st_cast(map, "MULTILINESTRING")) + 
+  geom_sf(data = no2.sf, col="red") + scale_fill_viridis() +
+  labs(title = "NO2 IDW interpolations")
+plot3
+```
+
+Figure 4: Visualization of NO2 Concentration Interpolations Using IDW Method
+
+-Figure4 represents **NO2 concentrations** across different regions on a map, likely corresponding to Germany given the shape and coordinates.
+
+```{r}
+plot2|plot3
+```
+
+Figure 5: Combine map of NO2 concentration and NO2 IDW interpolation
+
+-The Figure 5 depicts the spatial distribution of **NO2 concentrations**, with red dots indicating observed values. The right side uses **IDW interpolations** to predict NO2 levels across the entire region.
+
+### Variogram Cloud
+
+```{r}
+vcloud <- variogram(NO2~1, no2.sf, cloud=TRUE)
+```
+
+```{r}
+plot4<- ggplot(data=vcloud, aes(x=dist, y=gamma)) + geom_point()+
+    labs(title = "variogram cloud")
+
+plot4
+```
+
+Figure 6: Cloud graph
+
+-The Figure6 (**variogram cloud graph)** represents the spatial relationship between data points in a dataset.
+
+```{r}
+plot(vcloud)
+```
+
+Figure 7: Variogram cloud
+
+#### Binned Empirical Semi-Variogram
+
+```{r}
+v1 <- variogram(NO2~1, no2.sf)
+head(v1)
+```
+
+```{r}
+plot(v1, plot.numbers = TRUE, xlab = "distance h [m]",
+     ylab = expression(gamma(h)),
+     xlim = c(0, 1.055 * max(v1$dist)), main="Sample Experimental Variogram")
+```
+
+Figure 8: Sample Experimental Variogram
+
+#### Change default values
+
+```{r}
+v2 <- variogram(NO2~1, no2.sf, cutoff = 100000, width = 10000)
+head(v2)
+```
+
+```{r}
+plot(v2, plot.numbers = TRUE, xlab = "distance h [m]",
+     ylab = expression(gamma(h)),
+     xlim = c(0, 1.055 * max(v2$dist)))
+```
+
+Figure 9 : Sample variogram plot with adjusted cutoff and lag width
+
+### Fitting the variogram model
+
+```{r}
+v.m1 <- fit.variogram(v1, vgm(psill=20, model = "Exp", range = 20000, nugget = 1))
+plot(v1, v.m1, main="Exponential variogram model")
+```
+
+Figure10 : Exponential variogram model
+
+-The Figure 9 (**variogram cloud graph)** represents the spatial relationship between data points in a dataset.
+
+```{r,warning=FALSE,message=FALSE}
+v.m2 <- fit.variogram(v1, vgm(psill=20, model = "Sph", range = 20000, nugget = 1))
+plot(v1, v.m1, main="Spherical variogram model")
+```
+
+Figure 11 : Spherical variogram model
+
+### Assess isotropy assumption
+
+```{r,message=FALSE}
+v1.ani <- variogram(NO2~1, alpha = c(0, 45, 90, 135), no2.sf)
+head(v1.ani)
+```
+
+```{r}
+plot(v1.ani, v.m1,main="Isotopy ")
+```
+
+Figure 12: Isotropy graph
+
+-Figure 12 shows relationship with direction and NO2 concentration
+
+#### Addressing anisotropy parameters
+
+```{r}
+v1.ani <- variogram(NO2~1, alpha = c(0, 45, 90, 135), no2.sf)
+fit.ani <- vgm(psill=20, model = "Exp", range = 25000, nugget = 3, anis = c(30, 10, 0, 0.5, 0.3))
+plot(v1.ani, fit.ani)
+```
+
+Figure 13: Addressing anisotropy parameters
+
+## Variogram Map
+
+```{r}
+plot(variogram(NO2 ~ 1, no2.sf, map = TRUE, cutoff = 1000000, width = 10000))
+
+```
+
+Figure 13: Variogram map
+
+-Figure 13 shows relationship with direction and NO2 concentration
+
+### Kriging
+
+#### Ordinary Kriging
+
+```{r,message=FALSE}
+krigOK <- krige(NO2~1, no2.sf, grid, v.m1)
+krigOK
+```
+
+```{r}
+plot6<-ggplot() + geom_stars(data = krigOK, aes(fill = var1.pred, x = x, y = y)) + 
+  xlab(NULL) + ylab(NULL) +
+  geom_sf(data = st_cast(map, "MULTILINESTRING")) + 
+  geom_sf(data = no2.sf) +
+  coord_sf(lims_method = "geometry_bbox") + scale_fill_viridis()+labs(title = "Oridinar Kriging of NO2")
+plot(plot6 )
+```
+
+Figure 16: Visualization of NO2 Concentration Interpolations Using Ordinary kriging Method
+
+-Figure 16 presents **NO2 concentrations** across different regions on a map, likely corresponding to Germany given the shape and coordinates.
+
+```{r}
+plot2|plot6
+```
+
+Figure 17: Combine map of NO2 concentration and NO2 Ordinary Kriging interpolation
+
+## Cross validation
+
+#### Ordinary kriging
+
+```{r,message=FALSE}
+krig.ok.cv <- krige.cv(NO2~1, no2.sf, v.m1, nfold=5)
+krig.ok.cv[0:5,] 
+```
+
+#### IDW
+
+```{r,message=FALSE}
+idw.cv <- krige.cv(NO2~ 1, no2.sf, nmax = 7, nfold=5)
+idw.cv[0:5,]
+```
+
+### Residual Mean Squared Error (RMSE)
+
+```{r}
+sqrt(sum(idw.cv$residual^2)/length(idw.cv$residual))
+```
+
+```{r}
+round(sqrt(mean(krig.ok.cv$residual^2)), 2)
+```
+
+## Conclution
+
+-   The variogram map highlights the spatial variability of NO2 concentrations, emphasizing areas of concern and potential health risks related to air quality.
+
+-   The most suitable kriging method is ordinary kriging because there is no discernible trend, and the trent is an unknown constant.
+
+-   In Figure 13, upon examining the variogram map, the presence of **isotropy** in the spatial distribution of the variable under consideration is evident.
+
+-   There is no any spatial dependance.
